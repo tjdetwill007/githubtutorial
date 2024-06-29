@@ -27,7 +27,7 @@ jobs:
             
             - name: Check Instance status and state
               run: |
-                INSTANCE_ID = ${{ env.INSTANCE_ID }}
+                INSTANCE_ID=${{ env.INSTANCE_ID }}
                 INSTANCE_STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[].Instances[].State.Name" --output text)
 
                 if [ "$INSTANCE_STATE" != "running" ]; then
