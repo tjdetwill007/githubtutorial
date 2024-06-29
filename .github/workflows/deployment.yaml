@@ -9,9 +9,9 @@ env:
     REGION: ${{ vars.REGION || 'us-east-1' }}
     INSTANCE_ID: ${{ vars.INSTANCE_ID }}
     ECR_REPO: ${{ vars.ECR_REPO || 'dkr.///////' }}
-    HOST: ${{ vars.host_IP }}
-    USERNAME: ${{ vars.username || 'ec2-user' }}
-    SSH_KEY: $${{ secrets.private_key }}
+    HOST: ${{ vars.HOST_IP }}
+    USERNAME: ${{ vars.USERNAME || 'ec2-user' }}
+    SSH_KEY: $${{ secrets.PRIVATE_KEY }}
 
 jobs:
     check-instance-status:
