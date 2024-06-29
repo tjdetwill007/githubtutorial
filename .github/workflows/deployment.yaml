@@ -1,0 +1,94 @@
+name: Deployment pipeline
+
+on:
+    workflow_dispatch:
+
+env:
+    AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
+    AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
+    REGION: ${{ vars.REGION || 'us-east-1' }}
+    INSTANCE_ID: ${{ vars.INSTANCE_ID }}
+    ECR_REPO: ${{ vars.ECR_REPO || 'dkr.///////' }}
+    HOST: ${{ vars.host_IP }}
+    USERNAME: ${{ vars.username || 'ec2-user' }}
+    SSH_KEY: $${{ secrets.private_key }}
+
+jobs:
+    check-instance-status:
+        runs-on: ubuntu-latest
+        
+        steps:
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                aws-access-key-id: ${{ env.AWS_ACCESS_KEY }}
+                aws-secret-access-key: ${{ env.AWS_SECRET_KEY }}
+                aws-region: ${{ env.REGION }}
+            
+            - name: Check Instance status and state
+              run: |
+                INSTANCE_ID = ${{ env.INSTANCE_ID }}
+                INSTANCE_STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[].Instances[].State.Name" --output text)
+
+                if [ "$INSTANCE_STATE" != "running" ]; then
+                    echo "Instance $INSTANCE_ID is not running. Current state: $INSTANCE_STATE"
+                    exit 1
+                else
+                    echo "Instance $INSTANCE_ID is Running."
+                fi
+
+                INSTANCE_STATUS=$(aws ec2 describe-instance-status --instance-ids $INSTANCE_ID --query "InstanceStatuses[].InstanceStatus.Status" --output text)
+
+                if [ "$INSTANCE_STATUS" != "ok" ]; then
+                    echo "Instance $INSTANCE_ID status checks have not passed. Current status: $INSTANCE_STATUS"
+                    exit 1
+                else
+                    echo "Instance $INSTANCE_ID status checks are passed."
+                fi
+    build:
+        needs: check-instance-status
+        runs-on: ubuntu-latest
+        outputs:
+            image_name: ${{ steps.image_name.outputs.name }}
+        steps:
+            - name: Checkout Code
+              uses: actions/checkout@v4
+              with:
+                ref: main
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                aws-access-key-id: ${{ env.AWS_ACCESS_KEY }}
+                aws-secret-access-key: ${{ env.AWS_SECRET_KEY }}
+                aws-region: ${{ env.REGION }}
+
+            - name: Login to Amazon ECR
+              id: login_ecr
+              uses: aws-actions/amazon-ecr-login@v2
+  
+            - name: Build and push
+              id: docker_image
+              uses: docker/build-push-action@v4
+              with:
+                file: ./app/Dockerfile
+                push: true
+                tags: ${{ env.ECR_REPO }}:${{ github.sha }}
+
+            - name: Publish Pushed Image Name
+              id: image_name
+              run: echo "name=${{ env.ECR_REPO }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+    deploy:
+        needs: build
+        runs-on: ubuntu-latest
+        steps:
+          - name: Execute remote SSH commands
+            uses: appleboy/ssh-action@v1.0.3
+            with:
+              host: ${{ env.HOST }}
+              username: ${{ env.USERNAME }}
+              key: ${{ env.SSH_KEY }}
+              script: |
+                # check if app container is running
+                echo "hello world"
