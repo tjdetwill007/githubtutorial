@@ -11,7 +11,7 @@ env:
     ECR_REPO: ${{ vars.ECR_REPO || 'dkr.///////' }}
     HOST: ${{ vars.HOST_IP }}
     USERNAME: ${{ vars.USERNAME || 'ec2-user' }}
-    SSH_KEY: $${{ secrets.PRIVATE_KEY }}
+    SSH_KEY: ${{ secrets.PRIVATE_KEY }}
 
 jobs:
     check-instance-status:
