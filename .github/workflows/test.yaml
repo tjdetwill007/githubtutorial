@@ -1,0 +1,111 @@
+name: Deployment pipeline
+
+on:
+    workflow_dispatch:
+
+env:
+    AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
+    AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
+    REGION: ${{ vars.REGION || 'us-east-1' }}
+    INSTANCE_ID: ${{ vars.INSTANCE_ID }}
+    ECR_REPO: ${{ vars.ECR_REPO || 'dkr.///////' }}
+    HOST: ${{ vars.HOST_IP }}
+    USERNAME: ${{ vars.USERNAME || 'ec2-user' }}
+    SSH_KEY: ${{ secrets.PRIVATE_KEY }}
+
+jobs:
+    check-instance-status:
+        runs-on: ubuntu-latest
+        
+        steps:
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                aws-access-key-id: ${{ env.AWS_ACCESS_KEY }}
+                aws-secret-access-key: ${{ env.AWS_SECRET_KEY }}
+                aws-region: ${{ env.REGION }}
+            
+            - name: Check Instance status and state
+              run: |
+                INSTANCE_ID=${{ env.INSTANCE_ID }}
+                INSTANCE_STATE=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query "Reservations[].Instances[].State.Name" --output text)
+
+                if [ "$INSTANCE_STATE" != "running" ]; then
+                    echo "Instance $INSTANCE_ID is not running. Current state: $INSTANCE_STATE"
+                    exit 1
+                else
+                    echo "Instance $INSTANCE_ID is Running."
+                fi
+
+                INSTANCE_STATUS=$(aws ec2 describe-instance-status --instance-ids $INSTANCE_ID --query "InstanceStatuses[].InstanceStatus.Status" --output text)
+
+                if [ "$INSTANCE_STATUS" != "ok" ]; then
+                    echo "Instance $INSTANCE_ID status checks have not passed. Current status: $INSTANCE_STATUS"
+                    exit 1
+                else
+                    echo "Instance $INSTANCE_ID status checks are passed."
+                fi
+    build:
+        needs: check-instance-status
+        runs-on: ubuntu-latest
+        outputs:
+            image_name: ${{ steps.image_name.outputs.name }}
+        steps:
+            - name: Checkout Code
+              uses: actions/checkout@v4
+              with:
+                ref: master
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                aws-access-key-id: ${{ env.AWS_ACCESS_KEY }}
+                aws-secret-access-key: ${{ env.AWS_SECRET_KEY }}
+                aws-region: ${{ env.REGION }}
+
+            - name: Login to Amazon ECR
+              id: login_ecr
+              uses: aws-actions/amazon-ecr-login@v2
+  
+            - name: Build and push
+              id: docker_image
+              uses: docker/build-push-action@v4
+              with:
+                file: ./app/Dockerfile
+                push: true
+                tags: ${{ env.ECR_REPO }}:${{ github.sha }}
+
+            - name: Publish Pushed Image Name
+              id: image_name
+              run: echo "name=${{ env.ECR_REPO }}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+    deploy:
+        needs: build
+        runs-on: ubuntu-latest
+        steps:
+          - name: Execute remote SSH commands
+            uses: appleboy/ssh-action@v1.0.3
+            with:
+              host: ${{ env.HOST }}
+              username: ${{ env.USERNAME }}
+              key: ${{ env.SSH_KEY }}
+              script: |
+                #kill existing container if running
+                sudo docker kill myapp || true
+                sudo docker rm myapp || true
+                #configure aws cli
+                export AWS_ACCESS_KEY_ID=${{ env.AWS_ACCESS_KEY }}
+                export AWS_SECRET_ACCESS_KEY=${{ env.AWS_SECRET_KEY }}
+                aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin 520256696060.dkr.ecr.us-east-1.amazonaws.com
+                sudo docker pull ${{ needs.build.outputs.image_name }}
+                sudo docker run -d -p 80:5000 --name myapp ${{ needs.build.outputs.image_name }}
+                docker_run_exit_status=$?
+
+                if [ $docker_run_exit_status -ne 0 ]; then
+                  echo "Deployment failed"
+                  exit 1
+                else
+                  echo "Deployed successfully to EC2 instance"
+                fi
+
+                
